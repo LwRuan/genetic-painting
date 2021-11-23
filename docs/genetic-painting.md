@@ -1,5 +1,14 @@
 # Genetic Painting
 
+## Related Work
+### Genetic Drawing
+
+* In each stage, draw `strokeCount = 10` strokes
+* This 10 strokes formed a DNA, encoding each stroke's position, size, rotaion, type...
+* The population only contain 1 DNA, the only update operation is **mutation**
+* In each generation, pick one stroke in the DNA and mutate it, if better, keep it
+* After several generations, draw the DNA on canvas, start the next generation
+
 ## Basic Algorithm
 
 * Initialize the population
