@@ -9,6 +9,12 @@
 * In each generation, pick one stroke in the DNA and mutate it, if better, keep it
 * After several generations, draw the DNA on canvas, start the next generation
 
+### Genetic Algorithm to Draw Images
+
+* Compare single-parent and population-based
+
+
+
 ## Basic Algorithm
 
 * Initialize the population
@@ -29,3 +35,5 @@ The DNA is a list of genes where each gene encodes a polygon. The polygon could 
 * [Genetic Art Algorithm](https://blog.4dcu.be/programming/2020/01/12/Genetic-Art-Algorithm.html)
 * [Parallel Genetic Algorithm](https://medium.com/swlh/parallel-genetic-algorithm-3d3314c8373c#:~:text=%20Parallel%20Genetic%20Algorithm%20%201%20Concept%20of,simply%20instruct%20multiple%20processors%20to%20create...%20More%20)
 * [Genetic Drawing](https://github.com/anopara/genetic-drawing)
+* [Genetic Programming: Evolution of Mona Lisa](https://rogerjohansson.blog/2008/12/07/genetic-programming-evolution-of-mona-lisa/)
+* [Primitive for macOS](https://primitive.lol/)
