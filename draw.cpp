@@ -6,6 +6,7 @@
 #include <opencv2/opencv.hpp>
 #include <string>
 #include <vector>
+#include <omp.h>
 
 using namespace cv;
 
@@ -160,16 +161,17 @@ void Painter::InitGradientMap() {
 
 void Painter::InitPopulation() {
   // population_[cur_].clear();
+  Scalar color = original_img_.at<Vec3b>(rng.uniform(0, height_), rng.uniform(0, width_));
   for (int i = 0; i < pop_size_; ++i) {
     Point pos(rng.uniform(0, width_), rng.uniform(0, height_));
-    float local_mag = img_grad_mag_.at<float>(pos.x, pos.y);
-    float local_angle = img_grad_angle_.at<float>(pos.x, pos.y) + 90.0;
+    float local_mag = img_grad_mag_.at<float>(pos.y, pos.x);
+    float local_angle = img_grad_angle_.at<float>(pos.y, pos.x) + 90.0;
     float rotation = rng.uniform(-180, 180) * (1.0 - local_mag) + local_angle;
     population_[cur_][i] = Stroke(
         // Scalar(rng.uniform(0, 256), rng.uniform(0, 256), rng.uniform(0,
         // 256)),
-        original_img_.at<Vec3b>(rng.uniform(0, width_),
-                                rng.uniform(0, height_)),
+        original_img_.at<Vec3b>(pos.y, pos.x),
+        // color,
         pos,
         Size(rng.uniform(min_stroke_size_.width, max_stroke_size_.width),
              rng.uniform(min_stroke_size_.height, max_stroke_size_.height)),
@@ -220,14 +222,14 @@ void Painter::DrawStroke(const Stroke& stroke, const Mat& src, Mat& dst) {
 
 Stroke Painter::Mutate(const Stroke& src) {
   Stroke tmp = src;
-  int color_mut = 128;
+  int color_mut = 32;
   int px_mut = width_ / 8;
   int py_mut = height_ / 8;
   int sx_mut = (max_stroke_size_.width - min_stroke_size_.width) / 8;
   int sy_mut = (max_stroke_size_.height - min_stroke_size_.height) / 8;
   float rot_mut = 180;
   float alpha_mut = 0.2;
-  int idx = rng.uniform(0, 4);  // no alpha mutation
+  int idx = rng.uniform(1, 4);  // no alpha mutation
   switch (idx) {
     case 0:  // color
       tmp.color_ = src.color_ + Scalar(rng.uniform(-color_mut, color_mut),
@@ -242,6 +244,7 @@ Stroke Painter::Mutate(const Stroke& src) {
                                   rng.uniform(-py_mut, py_mut));
       tmp.pos_ = Point(std::clamp(int(tmp.pos_.x), 0, width_),
                        std::clamp(int(tmp.pos_.y), 0, height_));
+      tmp.color_ = original_img_.at<Vec3b>(tmp.pos_.y, tmp.pos_.x);
       break;
     case 2:  // size
       tmp.size_ = src.size_ + Size(rng.uniform(-sx_mut, sx_mut),
@@ -267,11 +270,12 @@ Stroke Painter::Mutate(const Stroke& src) {
 
 Stroke Painter::CrossOver(const Stroke& p1, const Stroke& p2) {
   Stroke c = p1;
-  if (rng.uniform(0.0, 1.0) < 0.5) {
-    c.color_ = p2.color_;
-  }
+  // if (rng.uniform(0.0, 1.0) < 0.5) {
+  //   c.color_ = p2.color_;
+  // }
   if (rng.uniform(0.0, 1.0) < 0.5) {
     c.pos_ = p2.size_;
+    c.color_ = p2.color_;
   }
   if (rng.uniform(0.0, 1.0) < 0.5) {
     c.size_ = p2.size_;
@@ -283,9 +287,8 @@ Stroke Painter::CrossOver(const Stroke& p1, const Stroke& p2) {
 }
 
 int main() {
-  Painter painter("../assets/monalisa-322px.jpg", 10, Size(10, 10),
+  Painter painter("../assets/seagull.jpg", 40, Size(20, 20),
                   Size(100, 100));
-  painter.InitPopulation();
-  painter.Paint(1000, 50, 1e3, 0.6, 0.8, 0.1, false);
+  painter.Paint(1000, 50, 8, 0.9, 0.8, 0.1, false);
   waitKey(0);
 }

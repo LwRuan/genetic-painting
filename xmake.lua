@@ -1,9 +1,10 @@
-add_requires("opencv")
+add_requires("opencv", "libomp", {optional = true})
 add_rules("mode.release", "mode.debug")
 set_languages("cxx17")
 
 target("GeneticPainter")
     set_kind("binary")
-    add_packages("opencv")
+    add_packages("opencv", "libomp")
+    add_rules("c++.openmp")
     add_files("draw.cpp")
     set_targetdir("bin")
