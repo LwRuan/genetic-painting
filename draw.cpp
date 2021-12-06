@@ -267,12 +267,17 @@ void Painter::CreateSamplingMask(int s, int stages) {
   if (s >= start_stage) {
     enable_mask_ = true;
     float t =
-        (1.0 - float(s - start_stage) / std::max(stages - start_stage - 1, 1)) *
-            0.25 +
-        0.005;
+        1.0 - float(s - start_stage) / std::max(stages - start_stage - 1, 1);
     GaussianBlur(img_grad_mag_, sample_mask_, Size(0, 0),
-                 std::max(width_ * t, 1.0f));
+                 std::max(width_ * (t * 0.25f + 0.005f), 1.0f));
+    Mat diff1, diff2, total_diff, diff_gray;
+    subtract(canvas_, original_img_, diff1);
+    subtract(original_img_, canvas_, diff2);
+    add(diff1, diff2, total_diff);
+    cvtColor(total_diff, diff_gray, COLOR_BGR2GRAY);
+    normalize(diff_gray, diff_gray, 0, 1, NORM_MINMAX, CV_32F);
     normalize(sample_mask_, sample_mask_, 0, 1, NORM_MINMAX, CV_32F);
+    addWeighted(diff_gray, 1-t, sample_mask_, t, 0, sample_mask_);
     mask_pp_.resize(width_ * height_);
     mask_pp_.assign((float*)sample_mask_.data,
                     (float*)sample_mask_.data + width_ * height_);
@@ -286,7 +291,7 @@ void Painter::CreateColorMask(int s, int stages) {
   int end_stage = int(stages * 0.7);
   original_img_.copyTo(color_mask_);
   if (s < end_stage) {
-    float t = (1.0 - float(s) / std::max(end_stage, 1)) * 0.001;
+    float t = (1.0 - float(s) / std::max(end_stage, 1)) * 0.01;
     GaussianBlur(original_img_, color_mask_, Size(0, 0),
                  std::max(width_ * t, 1.0f));
   }
@@ -360,8 +365,8 @@ Stroke Painter::CrossOver(const Stroke& p1, const Stroke& p2) {
   //   c.color_ = p2.color_;
   // }
   if (rng.uniform(0.0, 1.0) < 0.5) {
-    c.pos_ = p2.size_;
-    c.color_ = p2.color_;
+    c.pos_ = p2.pos_;
+    // c.color_ = p2.color_;
   }
   if (rng.uniform(0.0, 1.0) < 0.5) {
     c.size_ = p2.size_;
@@ -373,7 +378,7 @@ Stroke Painter::CrossOver(const Stroke& p1, const Stroke& p2) {
 }
 
 int main() {
-  Painter painter("../assets/seagull.jpg", 10, Size(20, 20), Size(70, 100));
-  painter.Paint(500, 40, 20, 0.9, 0.8, 0.2, false);
+  Painter painter("../assets/seagull.jpg", 20, Size(20, 20), Size(70, 100));
+  painter.Paint(1000, 40, 20, 0.9, 0.8, 0.2, true);
   waitKey(0);
 }
