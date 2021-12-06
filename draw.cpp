@@ -1,16 +1,19 @@
+#include <omp.h>
+
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <ctime>
 #include <iostream>
 #include <opencv2/opencv.hpp>
+#include <random>
 #include <string>
 #include <vector>
-#include <omp.h>
 
 using namespace cv;
 
 RNG rng((unsigned)time(NULL));
+// std::default_random_engine re((unsigned)time(NULL));
 
 class Stroke {
  public:
@@ -34,7 +37,9 @@ class Painter {
   Mat img_gray_;
   Mat img_grad_mag_;
   Mat img_grad_angle_;
-  Mat mask_;
+  Mat sample_mask_;
+  Mat color_mask_;
+  bool enable_mask_;
   Mat canvas_;
   int height_;
   int width_;
@@ -46,13 +51,16 @@ class Painter {
   std::array<std::vector<Stroke>, 2> population_;  // swap buffer
   int cur_;
   std::vector<float> pp_;
+  std::vector<Point> indices_;
+  std::vector<double> mask_pp_;
 
   Painter(const std::string& img_path, int pop_size, const Size& mins,
           const Size& maxs)
       : cur_(0),
         pop_size_(pop_size),
         min_stroke_size_(mins),
-        max_stroke_size_(maxs) {
+        max_stroke_size_(maxs),
+        enable_mask_(false) {
     original_img_ = imread(img_path);
     original_img_.copyTo(canvas_);
     canvas_.setTo(mean(original_img_));
@@ -61,24 +69,64 @@ class Painter {
     population_[0].resize(pop_size_);
     population_[1].resize(pop_size_);
     InitGradientMap();
+    img_gray_.copyTo(sample_mask_);
+    sample_mask_.setTo(0.0f);
+    original_img_.copyTo(color_mask_);
+    indices_.resize(width_ * height_);
+    for (int i = 0; i < height_; ++i) {
+      for (int j = 0; j < width_; ++j) {
+        indices_[i * width_ + j] = Point(j, i);
+      }
+    }
   }
 
   void Paint(int stages, int generations, float xi, float decay, float prob_crs,
-             float prob_mut, bool show_progress);
+             float prob_mut, bool verbose);
   void InitGradientMap();
   void InitPopulation();
   void ComputeCrossProb(float xi, float loss_worst);
   void EvaluatePopulation(int& idx_best, int& idx_worst);
   void CreateSamplingMask(int s, int stages);
+  void CreateColorMask(int s, int stages);
   float Evaluate(const Mat& src);
   void DrawStroke(const Stroke& stroke, const Mat& src, Mat& dst);
   Stroke Mutate(const Stroke& src);
+  Point MutatePos(const Point& pos);
+  Size MutateSize(const Size& size);
+  float MutateRot(const float& rot);
   Stroke CrossOver(const Stroke& p1, const Stroke& p2);
 };
 
 void Painter::Paint(int stages, int generations, float xi, float decay,
-                    float prob_crs, float prob_mut, bool show_progress) {
+                    float prob_crs, float prob_mut, bool verbose) {
+  Size c_min_st = min_stroke_size_;
+  Size c_max_st = max_stroke_size_;
   for (int s = 0; s < stages; ++s) {
+    int start_stage = int(stages * 0.1);
+    int end_stage = int(stages * 0.6);
+    if (s >= start_stage && s <= end_stage) {
+      float t = (1.0 - float(s - start_stage) /
+                           std::max(end_stage - start_stage, 1)) *
+                    0.9 +
+                0.1;
+      min_stroke_size_ =
+          Size(int(c_min_st.width * t), int(c_min_st.height * t));
+      max_stroke_size_ =
+          Size(int(c_max_st.width * t), int(c_max_st.height * t));
+    } else if (s > end_stage) {
+      min_stroke_size_ =
+          Size(int(c_min_st.width * 0.1), int(c_min_st.height * 0.1));
+      max_stroke_size_ =
+          Size(int(c_max_st.width * 0.1), int(c_max_st.height * 0.1));
+    }
+    CreateSamplingMask(s, stages);
+    CreateColorMask(s, stages);
+    if (verbose) {
+      Mat mask_img;
+      sample_mask_.convertTo(mask_img, CV_8U, 255);
+      imwrite("output/sampling_mask" + std::to_string(s) + ".png", mask_img);
+      imwrite("output/color_mask" + std::to_string(s) + ".png", color_mask_);
+    }
     InitPopulation();
     // Evaluate fitness
     int p_best, p_worst;
@@ -161,21 +209,36 @@ void Painter::InitGradientMap() {
 
 void Painter::InitPopulation() {
   // population_[cur_].clear();
-  Scalar color = original_img_.at<Vec3b>(rng.uniform(0, height_), rng.uniform(0, width_));
-  for (int i = 0; i < pop_size_; ++i) {
-    Point pos(rng.uniform(0, width_), rng.uniform(0, height_));
-    float local_mag = img_grad_mag_.at<float>(pos.y, pos.x);
-    float local_angle = img_grad_angle_.at<float>(pos.y, pos.x) + 90.0;
-    float rotation = rng.uniform(-180, 180) * (1.0 - local_mag) + local_angle;
+  Point pos;
+  if (enable_mask_) {
+    int idx =
+        std::upper_bound(mask_pp_.begin(), mask_pp_.end(),
+                         rng.uniform(0.0, mask_pp_[width_ * height_ - 1])) -
+        mask_pp_.begin();
+    pos = indices_[idx];
+  } else
+    pos = Point(rng.uniform(0, width_), rng.uniform(0, height_));
+  Scalar color = color_mask_.at<Vec3b>(pos.y, pos.x);
+  float local_mag = img_grad_mag_.at<float>(pos.y, pos.x);
+  float local_angle = img_grad_angle_.at<float>(pos.y, pos.x) + 90.0;
+  float rotation = rng.uniform(-180, 180) * (1.0 - local_mag) + local_angle;
+  population_[cur_][0] = Stroke(
+      color, pos,
+      Size(rng.uniform(min_stroke_size_.width, max_stroke_size_.width),
+           rng.uniform(min_stroke_size_.height, max_stroke_size_.height)),
+      rotation, 0.7);
+  for (int i = 1; i < pop_size_; ++i) {
+    // Point pos = indices_[distr(re)];
+    Point tpos = MutatePos(pos);
+    float t_mag = img_grad_mag_.at<float>(tpos.y, tpos.x);
+    float t_angle = img_grad_angle_.at<float>(tpos.y, tpos.x) + 90.0;
+    float t_rot = rng.uniform(-180, 180) * (1.0 - t_mag) + t_angle;
+
     population_[cur_][i] = Stroke(
-        // Scalar(rng.uniform(0, 256), rng.uniform(0, 256), rng.uniform(0,
-        // 256)),
-        original_img_.at<Vec3b>(pos.y, pos.x),
-        // color,
-        pos,
+        color, tpos,
         Size(rng.uniform(min_stroke_size_.width, max_stroke_size_.width),
              rng.uniform(min_stroke_size_.height, max_stroke_size_.height)),
-        rotation, 0.7);
+        t_rot, 0.7);
   }
 }
 
@@ -199,8 +262,33 @@ void Painter::EvaluatePopulation(int& idx_best, int& idx_worst) {
 }
 
 void Painter::CreateSamplingMask(int s, int stages) {
+  enable_mask_ = false;
   int start_stage = int(stages * 0.2);
   if (s >= start_stage) {
+    enable_mask_ = true;
+    float t =
+        (1.0 - float(s - start_stage) / std::max(stages - start_stage - 1, 1)) *
+            0.25 +
+        0.005;
+    GaussianBlur(img_grad_mag_, sample_mask_, Size(0, 0),
+                 std::max(width_ * t, 1.0f));
+    normalize(sample_mask_, sample_mask_, 0, 1, NORM_MINMAX, CV_32F);
+    mask_pp_.resize(width_ * height_);
+    mask_pp_.assign((float*)sample_mask_.data,
+                    (float*)sample_mask_.data + width_ * height_);
+    for (int i = 1; i < height_ * width_; ++i) {
+      mask_pp_[i] += mask_pp_[i - 1];
+    }
+  }
+}
+
+void Painter::CreateColorMask(int s, int stages) {
+  int end_stage = int(stages * 0.7);
+  original_img_.copyTo(color_mask_);
+  if (s < end_stage) {
+    float t = (1.0 - float(s) / std::max(end_stage, 1)) * 0.001;
+    GaussianBlur(original_img_, color_mask_, Size(0, 0),
+                 std::max(width_ * t, 1.0f));
   }
 }
 
@@ -222,50 +310,48 @@ void Painter::DrawStroke(const Stroke& stroke, const Mat& src, Mat& dst) {
 
 Stroke Painter::Mutate(const Stroke& src) {
   Stroke tmp = src;
-  int color_mut = 32;
-  int px_mut = width_ / 8;
-  int py_mut = height_ / 8;
-  int sx_mut = (max_stroke_size_.width - min_stroke_size_.width) / 8;
-  int sy_mut = (max_stroke_size_.height - min_stroke_size_.height) / 8;
-  float rot_mut = 180;
-  float alpha_mut = 0.2;
-  int idx = rng.uniform(1, 4);  // no alpha mutation
+  std::vector<double> mut_pp = {0.2, 0.6, 1.0};
+  int idx =
+      std::upper_bound(mut_pp.begin(), mut_pp.end(), rng.uniform(0.0, 1.0)) -
+      mut_pp.begin();
   switch (idx) {
-    case 0:  // color
-      tmp.color_ = src.color_ + Scalar(rng.uniform(-color_mut, color_mut),
-                                       rng.uniform(-color_mut, color_mut),
-                                       rng.uniform(-color_mut, color_mut));
-      tmp.color_ = Scalar(std::clamp(int(tmp.color_[0]), 0, 256),
-                          std::clamp(int(tmp.color_[1]), 0, 256),
-                          std::clamp(int(tmp.color_[2]), 0, 256));
+    case 0:  // pos
+      tmp.pos_ = MutatePos(src.pos_);
       break;
-    case 1:  // pos
-      tmp.pos_ = src.pos_ + Point(rng.uniform(-px_mut, px_mut),
-                                  rng.uniform(-py_mut, py_mut));
-      tmp.pos_ = Point(std::clamp(int(tmp.pos_.x), 0, width_),
-                       std::clamp(int(tmp.pos_.y), 0, height_));
-      tmp.color_ = original_img_.at<Vec3b>(tmp.pos_.y, tmp.pos_.x);
+    case 1:  // size
+      tmp.size_ = MutateSize(src.size_);
       break;
-    case 2:  // size
-      tmp.size_ = src.size_ + Size(rng.uniform(-sx_mut, sx_mut),
-                                   rng.uniform(-sy_mut, sy_mut));
-      tmp.size_ = Size(std::clamp(tmp.size_.width, min_stroke_size_.width,
-                                  max_stroke_size_.width),
-                       std::clamp(tmp.size_.height, min_stroke_size_.height,
-                                  max_stroke_size_.height));
-      break;
-    case 3:  // rotation
-      tmp.rotation_ = src.rotation_ + rng.uniform(-rot_mut, rot_mut);
-      tmp.rotation_ = float(int(tmp.rotation_) % 360);
-      break;
-    case 4:  // alpha
-      tmp.alpha_ = src.alpha_ + rng.uniform(-alpha_mut, alpha_mut);
-      tmp.alpha_ = std::clamp(tmp.alpha_, 0.5f, 1.0f);
+    case 2:  // rot
+      tmp.rotation_ = MutateRot(src.rotation_);
       break;
     default:
       break;
   }
   return tmp;
+}
+
+Point Painter::MutatePos(const Point& pos) {
+  int p_mut = std::min(width_ / 8, height_ / 8);
+  int x = pos.x + rng.uniform(-p_mut, p_mut);
+  int y = pos.y + rng.uniform(-p_mut, p_mut);
+  return Point(std::clamp(x, 0, width_ - 1), std::clamp(y, 0, height_ - 1));
+}
+
+Size Painter::MutateSize(const Size& size) {
+  Size tmp[4] = {Size(int(size.width * 1.5), size.height),
+                 Size(int(size.width * 0.67), size.height),
+                 Size(size.width, int(size.height * 1.5)),
+                 Size(size.width, int(size.height * 0.67))};
+  Size& ret = tmp[rng.uniform(0, 5)];
+  return Size(
+      std::clamp(ret.width, min_stroke_size_.width, max_stroke_size_.width),
+      std::clamp(ret.height, min_stroke_size_.height, max_stroke_size_.height));
+}
+
+float Painter::MutateRot(const float& rot) {
+  float rot_mut = 90;
+  float tmp = rot + rng.uniform(-rot_mut, rot_mut);
+  return float(int(tmp) % 360);
 }
 
 Stroke Painter::CrossOver(const Stroke& p1, const Stroke& p2) {
@@ -287,8 +373,7 @@ Stroke Painter::CrossOver(const Stroke& p1, const Stroke& p2) {
 }
 
 int main() {
-  Painter painter("../assets/seagull.jpg", 40, Size(20, 20),
-                  Size(100, 100));
-  painter.Paint(1000, 50, 8, 0.9, 0.8, 0.1, false);
+  Painter painter("../assets/seagull.jpg", 10, Size(20, 20), Size(70, 100));
+  painter.Paint(500, 40, 20, 0.9, 0.8, 0.2, false);
   waitKey(0);
 }
