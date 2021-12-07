@@ -9,6 +9,7 @@
 #include <random>
 #include <string>
 #include <vector>
+#include <filesystem>
 
 using namespace cv;
 
@@ -378,7 +379,10 @@ Stroke Painter::CrossOver(const Stroke& p1, const Stroke& p2) {
 }
 
 int main() {
-  Painter painter("../assets/seagull.jpg", 20, Size(20, 20), Size(70, 100));
-  painter.Paint(1000, 40, 20, 0.9, 0.8, 0.2, true);
+  Painter painter("../assets/owl.png", 20, Size(20, 20), Size(70, 100));
+  if(!std::filesystem::exists("output")) {
+    std::filesystem::create_directory("output");
+  }
+  painter.Paint(1000, 40, 20, 0.9, 0.8, 0.2, false);
   waitKey(0);
 }
