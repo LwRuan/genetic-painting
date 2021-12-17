@@ -2,3 +2,6 @@ bin
 build
 .xmake
 .vscode
+*.aux
+*.log
+*.synctex.gz
